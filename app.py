@@ -1,17 +1,26 @@
 # ==========================================================
 # STREAMLIT APP FOR MACHINE LEARNING ASSIGNMENT 2
 # DATASET: ADULT INCOME DATASET
+# APPROACH: NO JOBLIB FILES, MODELS TRAIN INSIDE STREAMLIT
 # ==========================================================
-
 
 # ==========================================================
 # SECTION 1: IMPORT LIBRARIES
 # ==========================================================
 
-import json
-import joblib
 import pandas as pd
 import streamlit as st
+
+from sklearn.model_selection import train_test_split
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.pipeline import Pipeline
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.ensemble import RandomForestClassifier
 
 from sklearn.metrics import (
     accuracy_score,
@@ -35,7 +44,10 @@ st.set_page_config(
 )
 
 st.title("Adult Income Classification App")
-st.write("This app predicts whether income is <=50K or >50K using different ML classification models.")
+st.write(
+    "This Streamlit app trains multiple machine learning classification models "
+    "on the Adult Income dataset and evaluates the selected model on uploaded test data."
+)
 
 
 # ==========================================================
@@ -60,49 +72,33 @@ columns = [
     "income"
 ]
 
+numeric_features = [
+    "age",
+    "fnlwgt",
+    "education-num",
+    "capital-gain",
+    "capital-loss",
+    "hours-per-week"
+]
+
+categorical_features = [
+    "workclass",
+    "education",
+    "marital-status",
+    "occupation",
+    "relationship",
+    "race",
+    "sex",
+    "native-country"
+]
+
 
 # ==========================================================
-# SECTION 4: LOAD MODEL FILE INFORMATION
+# SECTION 4: FUNCTION TO CLEAN DATA
 # ==========================================================
 
-with open("model/model_files.json", "r") as f:
-    model_files = json.load(f)
-
-
-# ==========================================================
-# SECTION 5: FILE UPLOAD OPTION
-# ==========================================================
-
-uploaded_file = st.file_uploader(
-    "Upload test CSV file",
-    type=["csv"]
-)
-
-if uploaded_file is not None:
-
-    # Try reading uploaded file normally.
-    data = pd.read_csv(uploaded_file)
-
-    # If uploaded file has no proper column names, assign Adult dataset column names.
-    if "income" not in data.columns:
-        uploaded_file.seek(0)
-        data = pd.read_csv(
-            uploaded_file,
-            header=None,
-            names=columns,
-            skipinitialspace=True,
-            na_values="?"
-        )
-
-    st.subheader("Uploaded Dataset Preview")
-    st.dataframe(data.head())
-
-    st.write("Dataset shape:", data.shape)
-
-
-    # ======================================================
-    # SECTION 6: CLEAN UPLOADED DATA
-    # ======================================================
+def clean_adult_data(data):
+    data = data.copy()
 
     data = data.dropna()
 
@@ -111,53 +107,206 @@ if uploaded_file is not None:
 
     data["income"] = data["income"].map({
         "<=50K": 0,
-        ">50K": 1
+        ">50K": 1,
+        "0": 0,
+        "1": 1
     })
 
     data = data.dropna()
 
-    X = data.drop("income", axis=1)
-    y = data["income"]
+    return data
 
 
-    # ======================================================
-    # SECTION 7: MODEL SELECTION DROPDOWN
-    # ======================================================
+# ==========================================================
+# SECTION 5: FUNCTION TO LOAD TRAINING DATA
+# ==========================================================
 
-    selected_model = st.selectbox(
-        "Select ML Model",
-        list(model_files.keys())
+def load_training_data():
+    df = pd.read_csv(
+        "adult.csv",
+        header=None,
+        names=columns,
+        skipinitialspace=True,
+        na_values="?"
     )
 
-    model_path = model_files[selected_model]
-    model = joblib.load(model_path)
+    df = clean_adult_data(df)
+
+    X = df.drop("income", axis=1)
+    y = df["income"]
+
+    return X, y
+
+
+# ==========================================================
+# SECTION 6: FUNCTION TO CREATE PREPROCESSOR
+# ==========================================================
+
+def create_preprocessor():
+    try:
+        one_hot_encoder = OneHotEncoder(
+            handle_unknown="ignore",
+            sparse_output=False
+        )
+    except TypeError:
+        one_hot_encoder = OneHotEncoder(
+            handle_unknown="ignore",
+            sparse=False
+        )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", StandardScaler(), numeric_features),
+            ("cat", one_hot_encoder, categorical_features)
+        ]
+    )
+
+    return preprocessor
+
+
+# ==========================================================
+# SECTION 7: TRAIN MODELS INSIDE STREAMLIT
+# ==========================================================
+
+@st.cache_resource
+def train_all_models():
+    X, y = load_training_data()
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.20,
+        random_state=42,
+        stratify=y
+    )
+
+    models = {
+        "Logistic Regression": LogisticRegression(
+            max_iter=1000,
+            random_state=42
+        ),
+        "Decision Tree": DecisionTreeClassifier(
+            random_state=42
+        ),
+        "KNN": KNeighborsClassifier(
+            n_neighbors=5
+        ),
+        "Naive Bayes": GaussianNB(),
+        "Random Forest": RandomForestClassifier(
+            n_estimators=100,
+            random_state=42
+        )
+    }
+
+    trained_models = {}
+
+    for model_name, classifier in models.items():
+
+        preprocessor = create_preprocessor()
+
+        pipeline = Pipeline(
+            steps=[
+                ("preprocessor", preprocessor),
+                ("classifier", classifier)
+            ]
+        )
+
+        pipeline.fit(X_train, y_train)
+
+        trained_models[model_name] = pipeline
+
+    return trained_models
+
+
+# ==========================================================
+# SECTION 8: TRAIN MODELS WHEN APP STARTS
+# ==========================================================
+
+with st.spinner("Training models from adult.csv. Please wait..."):
+    trained_models = train_all_models()
+
+st.success("Models trained successfully inside Streamlit app.")
+
+
+# ==========================================================
+# SECTION 9: FILE UPLOAD OPTION
+# ==========================================================
+
+st.subheader("Upload Test Dataset")
+
+uploaded_file = st.file_uploader(
+    "Upload test_data.csv",
+    type=["csv"]
+)
+
+if uploaded_file is not None:
+
+    uploaded_data = pd.read_csv(uploaded_file)
+
+    if "income" not in uploaded_data.columns:
+        uploaded_file.seek(0)
+        uploaded_data = pd.read_csv(
+            uploaded_file,
+            header=None,
+            names=columns,
+            skipinitialspace=True,
+            na_values="?"
+        )
+
+    st.subheader("Uploaded Dataset Preview")
+    st.dataframe(uploaded_data.head())
+
+    st.write("Dataset shape:", uploaded_data.shape)
+
+    test_data = clean_adult_data(uploaded_data)
+
+    X_test = test_data.drop("income", axis=1)
+    y_test = test_data["income"]
 
 
     # ======================================================
-    # SECTION 8: PREDICTION
+    # SECTION 10: MODEL SELECTION DROPDOWN
     # ======================================================
 
-    y_pred = model.predict(X)
-    y_prob = model.predict_proba(X)[:, 1]
+    st.subheader("Select Machine Learning Model")
+
+    selected_model_name = st.selectbox(
+        "Choose a model",
+        list(trained_models.keys())
+    )
+
+    selected_model = trained_models[selected_model_name]
 
 
     # ======================================================
-    # SECTION 9: DISPLAY EVALUATION METRICS
+    # SECTION 11: PREDICTION
     # ======================================================
 
-    accuracy = accuracy_score(y, y_pred)
-    auc = roc_auc_score(y, y_prob)
-    precision = precision_score(y, y_pred)
-    recall = recall_score(y, y_pred)
-    f1 = f1_score(y, y_pred)
-    mcc = matthews_corrcoef(y, y_pred)
+    y_pred = selected_model.predict(X_test)
+
+    if hasattr(selected_model, "predict_proba"):
+        y_prob = selected_model.predict_proba(X_test)[:, 1]
+    else:
+        y_prob = y_pred
+
+
+    # ======================================================
+    # SECTION 12: EVALUATION METRICS
+    # ======================================================
+
+    accuracy = accuracy_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, y_prob)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
+    mcc = matthews_corrcoef(y_test, y_pred)
 
     st.subheader("Evaluation Metrics")
 
     col1, col2, col3 = st.columns(3)
 
     col1.metric("Accuracy", round(accuracy, 4))
-    col1.metric("AUC", round(auc, 4))
+    col1.metric("AUC Score", round(auc, 4))
 
     col2.metric("Precision", round(precision, 4))
     col2.metric("Recall", round(recall, 4))
@@ -167,12 +316,12 @@ if uploaded_file is not None:
 
 
     # ======================================================
-    # SECTION 10: CONFUSION MATRIX
+    # SECTION 13: CONFUSION MATRIX
     # ======================================================
 
     st.subheader("Confusion Matrix")
 
-    cm = confusion_matrix(y, y_pred)
+    cm = confusion_matrix(y_test, y_pred)
 
     cm_df = pd.DataFrame(
         cm,
@@ -184,40 +333,43 @@ if uploaded_file is not None:
 
 
     # ======================================================
-    # SECTION 11: CLASSIFICATION REPORT
+    # SECTION 14: CLASSIFICATION REPORT
     # ======================================================
 
     st.subheader("Classification Report")
 
     report = classification_report(
-        y,
+        y_test,
         y_pred,
         target_names=["<=50K", ">50K"],
         output_dict=True
     )
 
     report_df = pd.DataFrame(report).transpose()
+
     st.dataframe(report_df)
 
 
     # ======================================================
-    # SECTION 12: SHOW PREDICTIONS
+    # SECTION 15: PREDICTION RESULTS
     # ======================================================
 
     st.subheader("Prediction Results")
 
-    output_data = X.copy()
-    output_data["Actual Income"] = y.map({
+    output_data = X_test.copy()
+
+    output_data["Actual Income"] = y_test.map({
         0: "<=50K",
         1: ">50K"
     })
 
-    output_data["Predicted Income"] = pd.Series(y_pred).map({
+    output_data["Predicted Income"] = pd.Series(y_pred, index=X_test.index).map({
         0: "<=50K",
         1: ">50K"
     })
 
     st.dataframe(output_data.head(20))
 
+
 else:
-    st.info("Please upload test_data.csv to begin.")
+    st.info("Please upload test_data.csv to evaluate the models.")
